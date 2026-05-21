@@ -39,14 +39,17 @@ grep -i "conflict\|terminated by other getUpdates" /tmp/doppel-bot.log | tail -5
 
 - 발견되면: 같은 토큰으로 *다른 곳에서 봇* 띄워져 있음. 그쪽을 끄거나 토큰을 새로 발급.
 
-### 4. Rate Limit / Claude API 에러
+### 4. Claude Code CLI 호출 에러 / 사용량 한도
 
 ```bash
-grep -iE "rate.limit|429|529|overloaded|claude.*error" /tmp/doppel-bot.log | tail -10
+which claude && claude --version 2>/dev/null | head -1
+grep -iE "claude_code_call_failed|TimeoutExpired|exit=|usage limit|rate.limit" /tmp/doppel-bot.log | tail -10
 ```
 
-- `429` → 잠시 기다린 후 재시도
-- `529 Overloaded` → Anthropic 측 일시 과부하, 재시도
+- `claude` 없음 → Claude Code 미설치/미로그인 → `claude login` 또는 설치 안내
+- `TimeoutExpired` → 응답 90초 초과 (긴 페르소나 응답) → bot.py `CLAUDE_CLI_TIMEOUT` 늘리기
+- `exit=1` + stderr `usage limit` → 본인 Claude Code 5시간 한도 도달 → *5시간 후 자동 리셋* 또는 구독 plan 업그레이드
+- 일시 네트워크 503/529 → 잠시 후 재시도
 
 ### 5. `system_prompt.md` 존재
 
@@ -55,14 +58,15 @@ test -f persona/system_prompt.md && echo "✓ 시스템 프롬프트 있음 ($(w
     || echo "✗ persona/system_prompt.md 없음 — /research-persona 부터"
 ```
 
-### 6. python-telegram-bot 버전
+### 6. python-telegram-bot 버전 + Claude Code 경로
 
 ```bash
 python3 -c "import telegram; print('python-telegram-bot:', telegram.__version__)"
-python3 -c "import anthropic; print('anthropic:', anthropic.__version__)"
+which claude || echo "✗ Claude Code CLI 없음 — claude login 또는 재설치 필요"
 ```
 
-- `python-telegram-bot` 가 *22 미만* 이면 `bot.py` 의 `ApplicationBuilder` 가 안 먹어요. `pip install --upgrade python-telegram-bot anthropic`.
+- `python-telegram-bot` 가 *22 미만* 이면 `bot.py` 의 `ApplicationBuilder` 가 안 먹어요. `pip install --upgrade python-telegram-bot`.
+- `anthropic` SDK 는 TF-938 hotfix 이후 *불필요* — Claude Code CLI 서브프로세스로 전환됨.
 
 ## 진단 결과 요약 카드
 

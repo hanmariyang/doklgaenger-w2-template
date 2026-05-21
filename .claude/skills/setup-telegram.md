@@ -1,11 +1,14 @@
 ---
 name: setup-telegram
-description: BotFather 에서 받은 텔레그램 봇 토큰을 `.env` 에 저장하고, `getMe` 로 토큰 유효성을 검증한다. Claude API 키 자리도 같이 채운다.
+description: BotFather 에서 받은 텔레그램 봇 토큰을 `.env` 에 저장하고, `getMe` 로 토큰 유효성을 검증한다. Claude Code 로그인은 별도 확인 (`/welcome` 에서 처리됨).
 ---
 
 # /setup-telegram — 인프라 셋업
 
 > 사용 시점: 단계 5 (인프라 셋업). `/simulate` 통과 후.
+>
+> TF-938 hotfix: Claude API 키 단계 제거. Claude Code CLI 가 *본인 로그인 사용량*으로
+> 동작하므로 .env 에는 텔레그램 토큰만 필요.
 
 ## 갱이가 할 일
 
@@ -22,11 +25,10 @@ test -f .env || cp .env.example .env
 
 ### 3. `.env` 채우기
 
-사용자에게 두 값을 차례로 받아서 `.env` 에 적는다.
+사용자에게 텔레그램 토큰을 받아서 `.env` 에 적는다.
 
 ```bash
 # 받은 토큰을 .env 에 박는 패턴
-sed -i.bak "s|^CLAUDE_API_KEY=.*|CLAUDE_API_KEY=<사용자_입력>|" .env
 sed -i.bak "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=<사용자_입력>|" .env
 rm .env.bak
 ```
@@ -44,9 +46,14 @@ curl -s "https://api.telegram.org/bot${TOKEN}/getMe" | python3 -m json.tool
 
 응답 JSON 의 `"ok": true` 와 `"username"` 을 확인하고 사용자에게 보여 준다.
 
-### 5. Claude API 키 가벼운 검증
+### 5. Claude Code CLI 가벼운 검증
 
-키 형식이 `sk-ant-...` 로 시작하는지만 grep. (실제 호출은 step 6 시작 시 자동 검증됨)
+```bash
+which claude  # 경로 출력되면 OK. 없으면 Claude Code 설치 안내.
+claude --version 2>/dev/null | head -1
+```
+
+(실제 호출은 step 6 `/bot start` 시 자동 검증)
 
 ### 6. 다음 단계 안내
 

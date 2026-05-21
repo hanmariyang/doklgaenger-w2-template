@@ -15,19 +15,29 @@ description: 텔레그램 없이 시스템 프롬프트로 5 turn 시연. 페르
 cat persona/system_prompt.md
 ```
 
-### 2. 5 turn 시뮬레이션
+### 2. 5 turn 시뮬레이션 (Claude Code CLI 서브프로세스)
 
-`anthropic` Python SDK 로 직접 호출 (텔레그램 안 거침). Claude Code 가 *대화 시뮬레이터*가 되어 5번 묻고, *Claude API* 가 페르소나로 답한다.
+TF-938 hotfix: `anthropic` SDK 제거 → Claude Code CLI 를 서브프로세스로 호출.
+*Claude Code 가 페르소나로 답하고*, 갱이는 시뮬레이터로서 5번 묻기.
 
-```python
+```bash
 # 갱이가 미리 준비한 5문 (사용자가 바꿔도 OK)
-SAMPLE_TURNS = [
-    "안녕하세요. 자기소개 부탁드려요.",
-    "오늘 날씨 어때요?",
-    "당신이 가장 잘하는 게 뭐예요?",
-    "고민이 있는데 들어 주실래요?",
-    "감사합니다. 마지막 한 마디 부탁드려요.",
-]
+SYSTEM="$(cat persona/system_prompt.md)"
+for q in \
+  "안녕하세요. 자기소개 부탁드려요." \
+  "오늘 날씨 어때요?" \
+  "당신이 가장 잘하는 게 뭐예요?" \
+  "고민이 있는데 들어 주실래요?" \
+  "감사합니다. 마지막 한 마디 부탁드려요."
+do
+  echo "─── Q: $q ───"
+  echo "$q" | claude -p \
+    --system-prompt "$SYSTEM" \
+    --no-session-persistence \
+    --permission-mode bypassPermissions \
+    --model sonnet
+  echo
+done
 ```
 
 각 turn 응답을 갱이가 화면에 보여 주고, 사용자에게 묻는다.

@@ -17,7 +17,7 @@ W2는 *임의의 영화/캐릭터 페르소나*를 골라서 텔레그램 봇으
 
 | # | 단계 | 갱이가 도와드리는 거 |
 |---|------|-------------------|
-| 0 | 사전 점검 | Claude Code 로그인, BotFather 안내, Claude API 키 자리 확인 |
+| 0 | 사전 점검 | Claude Code 로그인 (`which claude`), BotFather 안내, Python 3.11+ |
 | 1 | clone | `git clone` 후 폴더 진입 |
 | 2 | 인사 + 흐름 설명 | `/welcome` — 갱이가 8단계 미리 보여 드려요 |
 | 3 | 페르소나 선택 | `/pick-persona` — 취향 인터뷰 5문 → 후보 3개 추천 |
@@ -50,9 +50,8 @@ cd doklgaenger-w2-template
 ## 환경
 
 - Python 3.11+
-- Claude API 키 (Anthropic 콘솔)
+- **Claude Code CLI** (로그인 상태) — *별도 API 키 불필요*. `bot.py` 가 본인 Claude Code 구독 사용량으로 동작 (TF-938 hotfix).
 - Telegram Bot 토큰 (BotFather → `docs/botfather-guide.md`)
-- Claude Code CLI
 
 ---
 
