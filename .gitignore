@@ -1,0 +1,36 @@
+# 도클갱어 W2 — git ignore
+# 갱이가 절대 push되면 안 되는 것들을 박아 뒀어요 🐾
+
+# 환경변수 — 절대 push 금지
+.env
+.env.*
+!.env.example
+
+# 페르소나 시스템 프롬프트 — 기본은 비공개 (본인이 일부러 공개할 경우만 git add)
+persona/system_prompt.md
+
+# 봇 런타임 산출물
+.bot.pid
+*.log
+/tmp/doppel-bot.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.python-version
+*.egg-info/
+dist/
+build/
+
+# Claude Code 로컬 캐시
+.claude/local/
+.claude/.session/
+
+# 에디터·OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
