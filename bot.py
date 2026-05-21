@@ -29,6 +29,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -153,7 +155,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """일반 메시지 → Claude Code CLI 응답."""
+    """일반 메시지 → Claude Code CLI 응답.
+
+    PD-938 hotfix2 (2026-05-21): parse_mode=Markdown 활성화.
+    LLM 응답의 `**bold**` `*italic*` `` `code` ``가 raw 텍스트로 노출되던 문제 봉합.
+    Markdown 파싱 실패 시(escape 문제 등) plain text 로 fallback.
+    """
     user_text = update.message.text
     chat_id = update.message.chat_id
     logger.info("incoming chat_id=%s len=%s", chat_id, len(user_text or ""))
@@ -173,7 +180,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"에러: {type(exc).__name__}: {str(exc)[:200]}"
         )
 
-    await update.message.reply_text(reply)
+    # Markdown 먼저 시도 → 파싱 실패 시 plain text fallback.
+    # Telegram legacy Markdown: **bold** *italic* `code` [text](url) 지원.
+    # 응답에 escape 안 된 _ * [ 등이 있으면 BadRequest — fallback 으로 안전망.
+    try:
+        await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+    except BadRequest as exc:
+        logger.warning("markdown_parse_failed fallback_to_plain: %s", exc)
+        await update.message.reply_text(reply)
 
 
 # ─────────────────────────────────────────────────────────────
