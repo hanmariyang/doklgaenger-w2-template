@@ -1,0 +1,34 @@
+# 도클갱어 W3 — 캘린더 브리핑 사용자 설정 (예시)
+#
+# 1. 이 파일을 `config/briefing.yml` 로 복사하세요:  cp config/briefing.yml.example config/briefing.yml
+# 2. `/setup-briefing-style` 과 `/setup-briefing-schedule` 이 갱이와 대화하며 자동으로 값을 채워줘요.
+# 3. 직접 손으로 편집해도 OK. 봇 재시작 시 적용됩니다.
+# 4. `config/briefing.yml` 은 .gitignore 에 박혀 있어요 — 개인 설정 정보(chat_id 등) 보호.
+
+# ── 브리핑 양식 ──────────────────────────────────────────────
+style:
+  # 표시 형식
+  # list-with-comments : 시간순 리스트 + 페르소나 한 줄 코멘트  (기본)
+  # one-liner          : 핵심 1줄 요약 + 페르소나 한 줄 코멘트
+  # detailed           : 상세 (장소·페르소나 단락 포함)
+  format: list-with-comments
+
+  # 길이
+  # short  (3줄)  | medium  (각 일정 1줄 + 마무리) | long  (페르소나 생각 포함)
+  length: medium
+
+  # 빈 시간대 / 빈 하루도 표시할지
+  show_empty: true
+
+# ── 자동 푸시 스케줄 ─────────────────────────────────────────
+schedule:
+  # 자동 푸시 켤지. 처음에는 false. /setup-briefing-schedule 로 true 로 전환.
+  enabled: false
+
+  # KST 기준. HH:MM 24h
+  time: "08:00"
+
+  # 갱이가 사용자의 첫 메시지에서 *자동 학습* 한 chat_id.
+  # 미설정이면 봇 부팅 시 자동 푸시 등록 skip — 사용자 메시지를 받으면 봇 로그에 chat_id 가 찍히니
+  # 그 값을 여기 박아 주세요. 또는 /setup-briefing-schedule 이 안내해 줘요.
+  chat_id: 0

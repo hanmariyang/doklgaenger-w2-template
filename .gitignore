@@ -9,6 +9,9 @@
 # 페르소나 시스템 프롬프트 — 기본은 비공개 (본인이 일부러 공개할 경우만 git add)
 persona/system_prompt.md
 
+# W3 브리핑 사용자 설정 — chat_id 같은 개인 정보 보호 (TF-958)
+config/briefing.yml
+
 # 봇 런타임 산출물
 .bot.pid
 *.log
