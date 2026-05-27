@@ -38,7 +38,20 @@ Google Calendar 웹에서:
 - 노출 시 회전: Google Calendar 설정 → "비공개 주소 재설정".
 ```
 
-회사 캘린더 차단은 안 해요 (학습용). 단 *주의 메시지*만 명확히.
+```
+🔍 Anthropic 서버 전송 안내 (TF-958 DVA 권고 — 의뢰자 인지 필수)
+
+이 봇은 매일 아침 *오늘 일정 리스트*를 Claude Code CLI 로 보내요.
+Claude Code 는 그 정보를 *Anthropic 서버*에서 처리해서 페르소나 톤으로 그려서 돌려줘요.
+
+→ 회의명·참석자·고객명 같은 *캘린더 텍스트가 Anthropic 으로 전송*돼요.
+
+회사 보안 정책 · GDPR · 내부 정보보호 규정이 적용되는 환경이면:
+- Anthropic 데이터 사용 opt-out 미리 설정 권장 (https://privacy.anthropic.com/)
+- 또는 회사 캘린더 대신 *개인 캘린더*로 시작
+```
+
+회사 캘린더 차단은 안 해요 (학습용). 단 *주의 메시지 2건*(URL 보호 + Anthropic 전송)을 반드시 함께 보여 드려야 해요.
 
 ### 3. `.env` 에 박기
 

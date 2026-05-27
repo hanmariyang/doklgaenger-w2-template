@@ -70,14 +70,13 @@ cd doklgaenger-w2-template
 - Telegram Bot 토큰 (BotFather → `docs/botfather-guide.md`)
 - **W3 추가**: Google Calendar 비공개 iCal URL (선택, W3 부터). 발급은 `/setup-ical` 안내.
 
-## W3 패치 누적 설치 (clone 직후 1회)
+## W3 의존성 (clone 직후 1회)
 
 ```bash
-~/.local/bin/uv sync           # W3 의존성 (icalendar, python-dateutil, pyyaml, requests, PTB[job-queue])
-./scripts/install-w3-skills.sh # W3 Skills 4개를 .claude/skills/ 에 복사
+~/.local/bin/uv sync           # icalendar, python-dateutil, pyyaml, requests, PTB[job-queue]
 ```
 
-설치 후 Claude Code 안에서 `/welcome-w3` 호출하면 갱이가 안내해 드려요.
+설치 후 Claude Code 안에서 `/welcome-w3` 호출하면 갱이가 안내해 드려요. (W3 Skill 4개는 이미 `.claude/skills/` 에 박혀 있어요 — TF-958 hotfix 로 install script 제거됨.)
 
 ---
 

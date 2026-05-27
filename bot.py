@@ -250,6 +250,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     chat_id = update.message.chat_id
     logger.info("incoming chat_id=%s len=%s", chat_id, len(user_text or ""))
 
+    # TF-958 hotfix (DVA 조건 3): 들어온 chat_id 를 파일에 박는다.
+    # `/setup-briefing-schedule` Skill 이 이 파일 read → yml schedule.chat_id 자동 채움.
+    # 사용자가 본인 chat_id 를 *수동으로 알 필요 없음*.
+    try:
+        Path("/tmp/doppel-last-chat-id").write_text(str(chat_id), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass  # 파일 못 박아도 봇 진행에 영향 0
+
     if not user_text:
         await update.message.reply_text("(텍스트 메시지만 처리할 수 있어요)")
         return
