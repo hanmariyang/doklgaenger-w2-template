@@ -138,11 +138,20 @@ def _component_to_dict(component) -> Optional[dict]:
     }
 
 
-def _expand_recurring(component, base: dict, window_start: datetime, window_end: datetime) -> list[dict]:
+def _expand_recurring(
+    component, base: dict, window_start: datetime, window_end: datetime,
+    uid: str = "",
+    cancelled: Optional[set] = None,
+    overrides: Optional[dict] = None,
+) -> list[dict]:
     """RRULE 펼침 — *오늘 윈도우 안*만 전개.
 
-    PD-010 `_expand_recurring` 단순화 — cancelled_instances 등 고급 case 제거.
+    TF-958 hotfix2: PD-010 정합 — cancelled_instances + overrides 반영.
+    - cancelled: (uid, orig_start_utc) 집합. 매칭 시 인스턴스 제외.
+    - overrides: (uid, orig_start_utc) → override base dict. 매칭 시 그 dict 로 대체.
     """
+    cancelled = cancelled or set()
+    overrides = overrides or {}
     try:
         from dateutil.rrule import rrulestr
     except ImportError:
@@ -180,6 +189,17 @@ def _expand_recurring(component, base: dict, window_start: datetime, window_end:
             occurrence = occurrence.astimezone(dt_tz.utc)
         if occurrence in exdates:
             continue
+        key = (uid, occurrence)
+        # RECURRENCE-ID 로 *취소* 된 인스턴스 — skip
+        if key in cancelled:
+            continue
+        # RECURRENCE-ID 로 *override* 된 인스턴스 — override base 로 대체
+        if key in overrides:
+            ov = overrides[key]
+            # override 의 start_at 이 윈도우 안에 있으면 그것을 사용
+            if window_start <= ov["start_at"] < window_end:
+                out.append({**ov, "is_recurring_instance": True})
+            continue
         out.append(
             {
                 **base,
@@ -194,7 +214,14 @@ def _expand_recurring(component, base: dict, window_start: datetime, window_end:
 def extract_today_events(ical_bytes: bytes, now: Optional[datetime] = None) -> list[dict]:
     """iCal bytes → 오늘 KST 이벤트 list (시간 오름차순).
 
-    PD-010 `_extract_events` 단순화 — cancelled_instances 1st pass 제거 (학습용 충분).
+    TF-958 hotfix2 (2026-05-28): PD-010 `_extract_events` 의 *1st pass — RECURRENCE-ID + CANCELLED*
+    로직 복원. 중복·삭제 일정 노출 봉합.
+
+    2 pass:
+    - 1st pass: STATUS:CANCELLED + RECURRENCE-ID 가 있는 항목 = *recurring 의 특정 instance 취소*.
+      그 시각을 `cancelled_instances` 에 박아 두고 본 pass 의 RRULE 전개에서 제외.
+    - 2nd pass: VEVENT 본 전개. RECURRENCE-ID *override* 인스턴스(취소 아닌) 는 RRULE 전개에서 제외하고
+      override 본문을 따로 보존. UID + start_at dedup 으로 중복 노출 봉합.
     """
     if not ical_bytes:
         return []
@@ -210,19 +237,67 @@ def extract_today_events(ical_bytes: bytes, now: Optional[datetime] = None) -> l
         return []
 
     window_start, window_end = today_window_kst(now)
-    out: list[dict] = []
+
+    # ── 1st pass — RECURRENCE-ID 가 있는 인스턴스 분류 (override / cancel) ──
+    # key: (uid, original_start_utc) → "cancelled" or override base dict
+    overrides: dict[tuple[str, datetime], dict] = {}
+    cancelled_instances: set[tuple[str, datetime]] = set()
     for component in cal.walk("VEVENT"):
         try:
+            rec_id = component.get("RECURRENCE-ID")
+            if rec_id is None:
+                continue
+            uid = str(component.get("UID") or "")
+            orig_start = _to_aware_utc(rec_id.dt)
+            if not uid or not orig_start:
+                continue
             status = str(component.get("STATUS") or "").upper()
             if status == "CANCELLED":
+                cancelled_instances.add((uid, orig_start))
+            else:
+                base = _component_to_dict(component)
+                if base is not None:
+                    overrides[(uid, orig_start)] = base
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("1st-pass skip: %s", exc)
+            continue
+
+    # ── 2nd pass — VEVENT 본 전개 ──
+    out: list[dict] = []
+    seen: set[tuple[str, datetime]] = set()  # (uid, start_at) dedup
+    for component in cal.walk("VEVENT"):
+        try:
+            # CANCELLED 단일 또는 master 자체 skip
+            status = str(component.get("STATUS") or "").upper()
+            if status == "CANCELLED":
+                continue
+            # RECURRENCE-ID 가 있는 항목은 1st pass 에서 이미 처리 — 본 pass 에서 skip
+            if component.get("RECURRENCE-ID") is not None:
+                # override 인스턴스는 *원본 RRULE 의 그 시각*을 대체. RRULE 전개 단계에서 합쳐 박는다.
                 continue
             base = _component_to_dict(component)
             if base is None:
                 continue
+            uid = str(component.get("UID") or "")
+
             if component.get("RRULE"):
-                out.extend(_expand_recurring(component, base, window_start, window_end))
+                # RRULE 전개 — cancelled_instances + override 반영
+                instances = _expand_recurring(
+                    component, base, window_start, window_end,
+                    uid=uid, cancelled=cancelled_instances, overrides=overrides,
+                )
+                for inst in instances:
+                    key = (uid, inst["start_at"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(inst)
             else:
                 if window_start <= base["start_at"] < window_end:
+                    key = (uid, base["start_at"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     out.append(base)
         except Exception as exc:  # noqa: BLE001
             logger.warning("event skip: %s", exc)

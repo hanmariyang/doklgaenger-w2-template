@@ -203,9 +203,25 @@ async def _send_briefing(update_or_chat, context: ContextTypes.DEFAULT_TYPE) -> 
     """브리핑 생성·발송 — `/today`·자연어·자동 푸시가 공통 사용.
 
     update_or_chat: Update 객체이거나 chat_id (int). 자동 푸시 시 chat_id 만 전달.
+
+    TF-958 hotfix2: 즉시 ack 메시지 — yml `style.ack_message` 가 비어있지 않으면
+    *Claude 호출 전*에 페르소나 톤 1줄 발송. 사용자가 처리 중인지 즉시 인지.
     """
     system_prompt = context.bot_data["system_prompt"]
     config = load_briefing_config()  # 매 호출 reload — 사용자가 yml 손대도 즉시 반영
+
+    # ── 즉시 ack 발송 (페르소나 톤, yml 에서 읽음) ──
+    ack = (config.get("style") or {}).get("ack_message") or ""
+    if ack and ack.strip():
+        chat_id_for_ack = (
+            update_or_chat.message.chat_id if isinstance(update_or_chat, Update)
+            else update_or_chat
+        )
+        try:
+            await context.bot.send_message(chat_id=chat_id_for_ack, text=ack.strip())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ack_send_failed: %s", exc)
+
     try:
         text = generate_briefing(system_prompt, config=config)
     except Exception as exc:  # noqa: BLE001
