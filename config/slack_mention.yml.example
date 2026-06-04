@@ -1,0 +1,37 @@
+# 도클갱어 W4 — 슬랙 멘션 답변 어시스턴트 설정 (예시)
+#
+# 1. 이 파일을 `config/slack_mention.yml` 로 복사하세요:
+#       cp config/slack_mention.yml.example config/slack_mention.yml
+# 2. `/setup-slack-mention` 과 `/setup-slack-filter` 이 갱이와 대화하며 자동으로 값을 채워줘요.
+# 3. 직접 손으로 편집해도 OK. 봇이 매 멘션마다 yml 을 reload — 재시작 불필요.
+# 4. `config/slack_mention.yml` 은 .gitignore 에 박혀 있어요 — slack_user_id 같은 개인 정보 보호.
+
+# 슬랙 멘션 → 답변 초안 → 텔레그램 push 기능 켤지.
+enabled: true
+
+# 본인 슬랙 user ID (UXXXXXXXX).
+# `/setup-slack-mention` 스킬이 안내해 줘요. 본인이 자기 프로필 → "프로필 → 더 보기 → 멤버 ID 복사".
+# 빈 문자열이면 본인 멘션 감지 안 함 — 봇이 *직접* 멘션된 경우만 처리 (안전 기본값).
+slack_user_id: ""
+
+# 채널 allowlist. 빈 list = 전체 채널 처리.
+# 채널 ID (CXXXXXXXX) 또는 채널 이름 (#general / general) 둘 다 OK.
+# 회사 슬랙에서 시작할 땐 *소수 채널부터* 권장.
+channel_allowlist: []
+
+# 키워드 필터. 빈 list = 전체 메시지 처리.
+# 멘션 안에 이 키워드 중 *하나라도* 포함되어야 트리거.
+# 예: ["질문", "문의", "리뷰", "?"] — 단순 인사·잡담은 자동 제외.
+keyword_filter: []
+
+# 멘션 *직전* 메시지 N 개를 컨텍스트로 함께 넣음. 0 이면 컨텍스트 없이 멘션 본문만.
+# 너무 크면 Claude 입력 길어져 응답 느려짐. 3~5 권장.
+context_messages: 3
+
+# 즉시 ack 메시지 — 텔레그램에 *바로* 보내는 페르소나 톤 한 줄 (Claude 호출 안 함 = 즉시).
+# 빈 문자열이면 ack 안 보냄.
+# 예시:
+#   토니 스타크: "멘션 잡았어. JARVIS, 초안 줘."
+#   셜록: "흥미롭군. 잠시만, 살펴보겠네."
+#   요다: "기다리면, 답을 받게 될 것이다."
+ack_message: ""

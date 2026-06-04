@@ -12,6 +12,9 @@ persona/system_prompt.md
 # W3 브리핑 사용자 설정 — chat_id 같은 개인 정보 보호 (TF-958)
 config/briefing.yml
 
+# W4 슬랙 멘션 사용자 설정 — slack_user_id·채널 allowlist 같은 개인 정보 보호 (TF-981)
+config/slack_mention.yml
+
 # 봇 런타임 산출물
 .bot.pid
 *.log

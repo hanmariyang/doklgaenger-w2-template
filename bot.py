@@ -11,10 +11,17 @@ TF-958 W3 (2026-05-28):
 - 자연어 트리거 ("오늘 일정", "오늘 뭐 있어", "브리핑") + `/today` 명령 + JobQueue 자동 푸시.
 - 인프라(텔레그램·CLI·페르소나)는 그대로. 페르소나는 system_prompt + briefing 지침 합성.
 
+TF-981 W4 (2026-06-04):
+- *기능 1개 추가* — 슬랙 멘션 답변 어시스턴트 (Socket Mode).
+- `SLACK_APP_TOKEN` + `SLACK_BOT_TOKEN` 박혀 있으면 PTB post_init 훅에서
+  백그라운드 task 로 Socket Mode WebSocket 가동. 미박혀 있으면 silent skip.
+- 슬랙은 *outbound only* — 답신 X. 멘션 → Claude 답변 초안 → *본인 텔레그램*으로 push.
+- 운영자 서버 의존 0. 참가자가 자기 슬랙 앱 manifest import → 자기 토큰 발급 → 자기 노트북.
+
 신경계 비유:
-- 텔레그램(감각기관)이 입력을 받아 들이고,
+- 텔레그램·슬랙(감각기관 둘)이 입력을 받아 들이고,
 - Claude Code CLI(뇌)가 페르소나 시스템 프롬프트로 응답을 만들어
-- 다시 텔레그램으로 흘려 보내요.
+- 텔레그램으로 *흘려 보내요* (슬랙으로는 안 보내요 — 본인 손에 맡김).
 
 설계 원칙:
 - 페르소나는 `persona/system_prompt.md` 한 파일에서만 흘러나온다 (Single Source).
@@ -25,6 +32,7 @@ TF-958 W3 (2026-05-28):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -48,6 +56,7 @@ from telegram.ext import (
 )
 
 from commands.briefing import generate_briefing, load_briefing_config
+from commands.slack_mention import start_slack_socket_mode  # W4, TF-981
 
 # ─────────────────────────────────────────────────────────────
 # 설정 — 갱이가 미리 정해 둔 상수
@@ -377,7 +386,47 @@ def main() -> int:
     logger.info("persona_loaded chars=%s", len(system_prompt))
     logger.info("claude_cli_path=%s", shutil.which("claude"))
 
-    app = ApplicationBuilder().token(telegram_token).build()
+    # ── W4 (TF-981) — 슬랙 Socket Mode 백그라운드 가동 헬퍼 ──
+    # post_init 훅에서 호출 — PTB 의 이벤트 루프 안에서 background task 로 등록.
+    # SLACK_APP_TOKEN / SLACK_BOT_TOKEN 없으면 silent skip — W2/W3 만 쓰는 사람 영향 0.
+    async def _post_init(application):
+        # 텔레그램 push 클로저 — bot.py 가 슬랙 모듈에 PTB bot 인스턴스를 넘김.
+        # slack_user_id 는 yml 에서 사용자 본인이 박은 값. 환경변수 `TELEGRAM_PUSH_CHAT_ID` 가 있으면 우선.
+        # 미설정이면 /tmp/doppel-last-chat-id 에서 학습된 값 사용 (W3 패턴 정합).
+        async def _telegram_push(text: str) -> None:
+            chat_id_env = os.getenv("TELEGRAM_PUSH_CHAT_ID")
+            chat_id: int = 0
+            if chat_id_env:
+                try:
+                    chat_id = int(chat_id_env)
+                except ValueError:
+                    pass
+            if not chat_id:
+                try:
+                    learned = Path("/tmp/doppel-last-chat-id").read_text(encoding="utf-8").strip()
+                    chat_id = int(learned) if learned else 0
+                except Exception:  # noqa: BLE001
+                    chat_id = 0
+            if not chat_id:
+                logger.warning(
+                    "slack_push_skipped — chat_id 없음. "
+                    "텔레그램에서 본 봇에 메시지 1회 보내거나 .env 의 TELEGRAM_PUSH_CHAT_ID 채워 주세요.",
+                )
+                return
+            try:
+                await application.bot.send_message(chat_id=chat_id, text=text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("telegram_push_send_fail: %s", exc)
+
+        # 백그라운드 task 로 슬랙 Socket Mode 가동. bot 종료 시 cancel.
+        slack_task = asyncio.create_task(
+            start_slack_socket_mode(system_prompt, _telegram_push),
+            name="slack-socket-mode",
+        )
+        application.bot_data["slack_task"] = slack_task
+        logger.info("slack_socket_mode_task_scheduled")
+
+    app = ApplicationBuilder().token(telegram_token).post_init(_post_init).build()
     app.bot_data["system_prompt"] = system_prompt
 
     app.add_handler(CommandHandler("start", start_handler))
