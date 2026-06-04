@@ -1,0 +1,55 @@
+# 도클갱어 W4 — 슬랙 앱 manifest (TF-981, 2026-06-04)
+#
+# 사용법:
+#   1. https://api.slack.com/apps 접속 → "Create New App" → "From an app manifest"
+#   2. 워크스페이스 선택 (회사 슬랙 또는 본인 슬랙)
+#   3. 본 YAML 전체를 복붙 → "Next" → "Create"
+#   4. 좌측 메뉴 "Install App" → 본인 워크스페이스에 install → Bot Token (xoxb-...) 발급
+#   5. 좌측 메뉴 "Basic Information" → "App-Level Tokens" → "Generate Token and Scopes"
+#      → 이름 임의(예: socket-mode) + scope `connections:write` 추가 → Token (xapp-...) 발급
+#   6. 두 토큰을 본인 도클갱어 repo 의 `.env` 에 박기 (SLACK_BOT_TOKEN, SLACK_APP_TOKEN)
+#
+# 운영 원칙:
+#   - 본 manifest 는 *outbound only* — 이벤트 수신만 합니다. 인터랙티브·슬래시 명령 0.
+#   - 봇이 슬랙에 답신하지 않습니다 — 답변 초안은 *본인 텔레그램*으로만 흘립니다.
+#   - 회사 슬랙 admin 이 manifest install 을 차단할 수 있어요. 그땐 본인 슬랙 워크스페이스 신설 fallback.
+
+display_information:
+  name: 도클갱어 답변봇
+  description: 본인 멘션 시 페르소나가 텔레그램으로 답변 초안 제안 (도클갱어 W4)
+  background_color: "#1A1A1A"
+  long_description: 도클갱어 W4 학습용 봇입니다. 본인이 슬랙에서 멘션받으면, 본인 노트북의 페르소나(W2 챗봇)가 답변 초안을 만들어서 본인 텔레그램으로만 보내 줍니다. 슬랙에는 봇이 어떤 메시지도 보내지 않습니다 — 본인이 검토·수정 후 직접 답합니다.
+
+features:
+  bot_user:
+    display_name: 도클갱어 답변봇
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      # 멘션 수신
+      - app_mentions:read
+      # 채널 메시지 히스토리 (직전 N 개 컨텍스트 fetch + 본인 멘션 메시지 본문 read)
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+      # 컨텍스트용 사용자/채널 메타 조회
+      - users:read
+      - team:read
+
+settings:
+  event_subscriptions:
+    # Socket Mode 사용 — request_url 없음. WebSocket outbound 만.
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
