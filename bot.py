@@ -18,6 +18,13 @@ TF-981 W4 (2026-06-04):
 - 슬랙은 *outbound only* — 답신 X. 멘션 → Claude 답변 초안 → *본인 텔레그램*으로 push.
 - 운영자 서버 의존 0. 참가자가 자기 슬랙 앱 manifest import → 자기 토큰 발급 → 자기 노트북.
 
+TF-1040 W5 (2026-06-18):
+- *기능 1개 추가* — 회의록 요약 어시스턴트.
+- `/notes` 명령 + 자연어("회의록","회의 정리","정리해줘"…) 부분 매칭 + 긴 메모 자동 인식.
+- 사용자가 회의 메모/대화 로그를 *붙여 넣으면* 페르소나가 구조화 회의록으로 변환.
+  음성·STT 0 (의도적 단순화). 사실 보존 — 참석자·결정·숫자·날짜는 그대로, 톤만 입힘.
+- 긴 회의록은 텔레그램 4096자 한도를 넘으니 *여러 메시지로 분할 발송*.
+
 신경계 비유:
 - 텔레그램·슬랙(감각기관 둘)이 입력을 받아 들이고,
 - Claude Code CLI(뇌)가 페르소나 시스템 프롬프트로 응답을 만들어
@@ -57,6 +64,12 @@ from telegram.ext import (
 
 from commands.briefing import generate_briefing, load_briefing_config
 from commands.slack_mention import start_slack_socket_mode  # W4, TF-981
+from commands.meeting_notes import (  # W5, TF-1040
+    AUTO_NOTES_MIN_CHARS,
+    generate_meeting_notes,
+    load_meeting_config,
+    looks_like_meeting_paste,
+)
 
 # ─────────────────────────────────────────────────────────────
 # 설정 — 갱이가 미리 정해 둔 상수
@@ -77,6 +90,22 @@ BRIEFING_PATTERNS = [
         r"브리핑",
         r"briefing",
         r"today.*schedule",
+    )
+]
+
+# W5 (TF-1040) — 자연어로 회의록을 부르는 패턴.
+# 메시지에 부분 매칭 → 들어 있으면 회의록 모드로 라우팅.
+# 단, *메모 본문 안에* 우연히 "정리해줘" 가 섞여 있을 수도 있으니, 회의록 트리거는
+# message_handler 에서 *briefing 다음·긴 메모 자동인식 앞* 순서로 본다 (아래 우선순위 주석 참조).
+MEETING_PATTERNS = [
+    re.compile(p, re.IGNORECASE) for p in (
+        r"회의록",
+        r"회의\s*정리",
+        r"회의\s*내용",
+        r"회의\s*요약",
+        r"정리\s*해\s*줘",        # "정리해줘", "정리 해 줘"
+        r"meeting\s*notes",
+        r"minutes",
     )
 ]
 
@@ -183,9 +212,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """`/start` — 페르소나 첫 인사 안내."""
     await update.message.reply_text(
         "안녕하세요 🐾\n"
-        "이 봇은 도클갱어 W2/W3 페르소나 챗봇이에요.\n"
+        "이 봇은 도클갱어 페르소나 챗봇이에요.\n"
         "메시지를 보내 주시면 페르소나로 답변해 드려요.\n"
-        "오늘 일정이 궁금하면 `/today` 또는 “오늘 일정” 이라고 보내 주세요."
+        "오늘 일정이 궁금하면 `/today` 또는 “오늘 일정”,\n"
+        "회의 메모를 정리하려면 `/notes` 뒤에 메모를 붙이거나 “회의록” 이라고 보내 주세요."
     )
 
 
@@ -261,6 +291,147 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _send_briefing(update, context)
 
 
+# ─────────────────────────────────────────────────────────────
+# W5 (TF-1040) — 회의록 요약 어시스턴트
+# ─────────────────────────────────────────────────────────────
+
+def _split_for_telegram(text: str, limit: int = MAX_REPLY_CHARS) -> list[str]:
+    """긴 텍스트를 텔레그램 4096자 한도에 맞춰 *여러 조각*으로 나눈다.
+
+    회의록은 브리핑·답변 초안과 달리 길어질 수 있어요 (여러 섹션). W2~W4 처럼 잘라 버리면
+    뒤쪽 결정사항·액션아이템이 사라지므로, W5 는 *자르지 않고 분할 발송* 합니다.
+
+    경계 우선순위 — 가독성을 위해 *문단(빈 줄) → 줄 → 강제 슬라이스* 순으로 끊어요:
+    1) 빈 줄(`\\n\\n`) 단위로 묶어 limit 안에서 채운다.
+    2) 한 문단이 단독으로 limit 보다 길면 줄(`\\n`) 단위로 쪼갠다.
+    3) 한 줄이 단독으로 limit 보다 길면 limit 길이로 강제 슬라이스.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    buf = ""
+
+    def _flush() -> None:
+        nonlocal buf
+        if buf.strip():
+            chunks.append(buf.strip())
+        buf = ""
+
+    for para in text.split("\n\n"):
+        block = para if not buf else "\n\n" + para
+        if len(buf) + len(block) <= limit:
+            buf += block
+            continue
+        # 현재 버퍼를 비우고 새 문단을 단독 처리
+        _flush()
+        if len(para) <= limit:
+            buf = para
+            continue
+        # 문단이 단독으로도 limit 초과 → 줄 단위로 쪼갬
+        for line in para.split("\n"):
+            line_block = line if not buf else "\n" + line
+            if len(buf) + len(line_block) <= limit:
+                buf += line_block
+                continue
+            _flush()
+            if len(line) <= limit:
+                buf = line
+                continue
+            # 한 줄이 단독으로도 limit 초과 → 강제 슬라이스
+            for k in range(0, len(line), limit):
+                chunks.append(line[k:k + limit])
+    _flush()
+    return chunks
+
+
+def _is_meeting_trigger(text: str) -> bool:
+    """메시지 텍스트가 *회의록* 자연어 트리거에 매칭되는지.
+
+    W5 (TF-1040) — 패턴 리스트는 모듈 상단 MEETING_PATTERNS 참조.
+    """
+    if not text:
+        return False
+    return any(p.search(text) for p in MEETING_PATTERNS)
+
+
+async def _send_meeting_notes(update: Update, raw_text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """회의록 생성·발송 — `/notes`·자연어·긴 메모 자동인식이 공통 사용.
+
+    raw_text: 회의록으로 정리할 *메모 본문* (트리거 키워드는 호출부에서 제거 후 전달).
+
+    W3 _send_briefing 패턴 정합:
+    - yml `ack_message` 가 비어있지 않으면 *Claude 호출 전* 페르소나 톤 ack 한 줄.
+    - 긴 회의록은 _split_for_telegram 으로 *여러 메시지 분할 발송*.
+    """
+    system_prompt = context.bot_data["system_prompt"]
+    config = load_meeting_config()  # 매 호출 reload — 사용자가 yml 손대도 즉시 반영
+
+    if not config.get("enabled", True):
+        await _reply_safe(update, "갱이가 회의록 기능이 꺼져 있는 걸 봤어요 🐾 (config/meeting_notes.yml 의 enabled)")
+        return
+
+    # ── 즉시 ack 발송 (페르소나 톤, yml 에서 읽음) ──
+    ack = (config.get("ack_message") or "").strip()
+    if ack:
+        try:
+            await context.bot.send_message(chat_id=update.message.chat_id, text=ack)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("meeting_ack_send_failed: %s", exc)
+
+    try:
+        notes = await asyncio.to_thread(
+            generate_meeting_notes, system_prompt, raw_text, config
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("meeting_notes_failed")
+        notes = (
+            f"갱이가 회의록 만들다 막혔어요... 🐾\n"
+            f"로그 확인: `tail -f /tmp/doppel-bot.log`\n"
+            f"에러: {type(exc).__name__}: {str(exc)[:200]}"
+        )
+
+    # 긴 회의록 → 분할 발송. 한 조각이면 markdown fallback 까지 _reply_safe 재사용.
+    parts = _split_for_telegram(notes)
+    if not parts:
+        await update.message.reply_text("(빈 회의록을 받았어요 — 메모를 다시 붙여 주세요)")
+        return
+    if len(parts) == 1:
+        await _reply_safe(update, parts[0])
+        return
+    logger.info("meeting_notes_split parts=%s chat_id=%s", len(parts), update.message.chat_id)
+    for idx, part in enumerate(parts, start=1):
+        labeled = f"({idx}/{len(parts)})\n\n{part}"
+        try:
+            await update.message.reply_text(labeled, parse_mode=ParseMode.MARKDOWN)
+        except BadRequest:
+            await update.message.reply_text(labeled)
+
+
+async def notes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/notes` — 회의록 즉시 생성 (W5, TF-1040).
+
+    `/notes` 뒤에 메모를 같이 붙이면 그 메모를 정리. 명령만 보내면 붙여넣기 안내.
+    """
+    chat_id = update.message.chat_id
+    # `/notes ...메모...` 형태에서 명령 토큰 뒤 본문만 추출
+    full = (update.message.text or "")
+    raw = full.split(maxsplit=1)
+    body = raw[1].strip() if len(raw) > 1 else ""
+    logger.info("notes_command chat_id=%s body_len=%s", chat_id, len(body))
+    if not body:
+        await update.message.reply_text(
+            "갱이가 회의록으로 정리해 드릴게요 🐾\n"
+            "→ 회의 메모나 대화 로그를 *한 메시지로* 붙여 넣어 주세요.\n"
+            "  `/notes` 뒤에 바로 붙여도 되고, 그냥 긴 메모를 보내셔도 인식해요."
+        )
+        return
+    await _send_meeting_notes(update, body, context)
+
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """일반 메시지 → Claude Code CLI 응답.
 
@@ -270,6 +441,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     TF-958 W3 (2026-05-28): "오늘 일정/브리핑" 등 자연어 매칭 시 briefing 로 라우팅.
     매칭 안 되면 기존 페르소나 응답 그대로.
+
+    TF-1040 W5 (2026-06-18): 라우팅 우선순위 — (1) 브리핑 자연어 → (2) 회의록 자연어
+    또는 긴 메모 자동 인식 → (3) 일반 페르소나 응답. 회의록 자동 인식은 *긴 여러 줄
+    메모*(looks_like_meeting_paste) 일 때만 — 짧은 잡담은 평소처럼 페르소나가 답함.
     """
     user_text = update.message.text
     chat_id = update.message.chat_id
@@ -291,6 +466,25 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if _is_briefing_trigger(user_text):
         logger.info("briefing_trigger_matched chat_id=%s", chat_id)
         await _send_briefing(update, context)
+        return
+
+    # W5 — 회의록 트리거. (a) 자연어 키워드 매칭 또는 (b) 긴 여러 줄 메모 자동 인식.
+    # 둘 중 하나면 회의록 모드. 트리거 키워드만 있고 본문이 거의 없으면(짧은 한 줄)
+    # 붙여넣기 안내로 흘려 보냄 — 정리할 본문이 없으니까.
+    meeting_kw = _is_meeting_trigger(user_text)
+    long_paste = looks_like_meeting_paste(user_text)
+    if meeting_kw or long_paste:
+        # 트리거 키워드만 있고 본문이 짧으면(예: "회의록 정리해줘") → 안내
+        if meeting_kw and not long_paste and len(user_text.strip()) < AUTO_NOTES_MIN_CHARS:
+            logger.info("meeting_trigger_no_body chat_id=%s", chat_id)
+            await update.message.reply_text(
+                "갱이가 회의록으로 정리해 드릴게요 🐾\n"
+                "→ 회의 메모나 대화 로그를 *한 메시지로* 붙여 넣어 주세요.\n"
+                "  (긴 메모는 그냥 보내면 자동으로 회의록 모드로 인식해요.)"
+            )
+            return
+        logger.info("meeting_trigger_matched chat_id=%s kw=%s long=%s", chat_id, meeting_kw, long_paste)
+        await _send_meeting_notes(update, user_text, context)
         return
 
     try:
@@ -431,6 +625,7 @@ def main() -> int:
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("today", today_handler))  # W3, TF-958
+    app.add_handler(CommandHandler("notes", notes_handler))  # W5, TF-1040
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     # W3 (TF-958) — 자동 푸시 등록. yml 없거나 enabled=False 면 silent skip.

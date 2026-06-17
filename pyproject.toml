@@ -24,6 +24,10 @@ dependencies = [
     # slack-bolt 가 SocketModeHandler 와 데코레이터 핸들러를 묶어 줘서 코드가 짧다.
     # slack-sdk 는 bolt 의 transitive dep — Web API client 도 같이 따라옴.
     "slack-bolt>=1.21.0",
+    "aiohttp>=3.14.0",
+    # TF-1040 W5 (2026-06-18): 회의록 요약 어시스턴트.
+    # *새 의존성 0* — 순수 텍스트 처리라 추가 패키지 없음. 이미 있는 pyyaml(양식)만 재사용.
+    # `uv sync` 가 "Nothing to install" 이면 정상.
 ]
 
 [project.optional-dependencies]

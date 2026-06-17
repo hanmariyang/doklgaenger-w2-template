@@ -15,6 +15,9 @@ config/briefing.yml
 # W4 슬랙 멘션 사용자 설정 — slack_user_id·채널 allowlist 같은 개인 정보 보호 (TF-981)
 config/slack_mention.yml
 
+# W5 회의록 양식 — 개인 회의 스타일 설정 보호 (TF-1040)
+config/meeting_notes.yml
+
 # 봇 런타임 산출물
 .bot.pid
 *.log
