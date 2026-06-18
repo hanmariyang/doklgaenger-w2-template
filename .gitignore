@@ -23,6 +23,11 @@ config/meeting_notes.yml
 *.log
 /tmp/doppel-bot.log
 
+# W5 자유 실습 — 로컬 DB 저장 시 회의 본문 보호 (TF-1040)
+*.db
+*.sqlite3
+meeting_notes.db
+
 # Python
 __pycache__/
 *.py[cod]

@@ -46,7 +46,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import time as dt_time
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -382,10 +382,12 @@ async def _send_meeting_notes(update: Update, raw_text: str, context: ContextTyp
         except Exception as exc:  # noqa: BLE001
             logger.warning("meeting_ack_send_failed: %s", exc)
 
+    notes_ok = False
     try:
         notes = await asyncio.to_thread(
             generate_meeting_notes, system_prompt, raw_text, config
         )
+        notes_ok = True
     except Exception as exc:  # noqa: BLE001
         logger.exception("meeting_notes_failed")
         notes = (
@@ -393,6 +395,30 @@ async def _send_meeting_notes(update: Update, raw_text: str, context: ContextTyp
             f"로그 확인: `tail -f /tmp/doppel-bot.log`\n"
             f"에러: {type(exc).__name__}: {str(exc)[:200]}"
         )
+
+    # ── 자유 실습 (선택, W5 TF-1040) — 회의록 DB 저장 훅 ───────────────
+    # config 의 store.enabled: true 이고 생성이 성공했을 때만 시도.
+    # commands/notes_store.py 의 save_meeting_notes 는 *기본 미구현* — 참가자가
+    # 본인 DB 로 직접 채우는 자유 실습. 저장 실패·미구현은 회의록 발송을 절대 막지 않음.
+    # 가이드: Claude Code 안에서 /save-notes-db
+    if notes_ok and (config.get("store") or {}).get("enabled"):
+        try:
+            from commands.notes_store import save_meeting_notes
+            record = {
+                "created_at": datetime.now(KST).isoformat(timespec="seconds"),
+                "chat_id": update.message.chat_id,
+                "raw_text": raw_text,
+                "notes": notes,
+            }
+            if await asyncio.to_thread(save_meeting_notes, record):
+                logger.info("meeting_notes_saved chat_id=%s", update.message.chat_id)
+        except NotImplementedError:
+            logger.info(
+                "meeting_notes_store: store.enabled 인데 save_meeting_notes 가 아직 비어 있어요 — "
+                "자유 실습: commands/notes_store.py 를 본인 DB 로 채워 보세요 (/save-notes-db)."
+            )
+        except Exception as exc:  # noqa: BLE001 — 저장 실패가 회의록 발송을 막지 않게
+            logger.warning("meeting_notes_store_failed: %s", exc)
 
     # 긴 회의록 → 분할 발송. 한 조각이면 markdown fallback 까지 _reply_safe 재사용.
     parts = _split_for_telegram(notes)

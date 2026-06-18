@@ -37,3 +37,13 @@ action_item_format: checkbox
 #   셜록: "흥미롭군. 회의의 뼈대를 추려 보겠네."
 #   요다: "정리하면, 보일 것이다. 기다려라."
 ack_message: ""
+
+# ── 자유 실습 (선택) — 회의록 DB 저장 ────────────────────────
+# 지금까지 봇은 무상태였어요 (대화 이력 저장 0). 회의록을 어딘가에 *영구 저장*하고
+# 싶으면 직접 붙여 보는 자유 실습이에요. 정답 코드는 없어요 — 본인 DB 로, 본인 손으로.
+#   1) store.enabled 를 true 로
+#   2) commands/notes_store.py 의 save_meeting_notes 를 본인 DB(SQLite/Postgres/Notion…)로 구현
+#   3) Claude Code 안에서  /save-notes-db   (설계 질문 + 힌트)
+# 켜도 save_meeting_notes 가 비어 있으면 회의록 발송엔 영향 0 (저장만 skip + 로그 안내).
+store:
+  enabled: false
