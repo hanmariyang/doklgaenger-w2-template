@@ -242,7 +242,9 @@ def _parse_sse_json(text: str) -> list[dict]:
     파싱 실패한 줄은 조용히 건너뜀.
     """
     out: list[dict] = []
-    for line in (text or "").splitlines():
+    # split("\n") 사용 — str.splitlines() 는 NEL(\x85)·LS·PS 같은 유니코드 줄바꿈도
+    # 끊어서, 응답이 잘못된 인코딩으로 디코딩된 경우 본문 JSON 한가운데가 쪼개진다.
+    for line in (text or "").replace("\r\n", "\n").split("\n"):
         line = line.strip()
         if not line.startswith("data:"):
             continue
@@ -315,12 +317,17 @@ def publish_post(
         "실패"가 아니라 "올라갔는지 불확실 — 피드를 먼저 확인하고 재시도"라고 정직하게 전한다.
         """
         try:
-            return requests.post(
+            resp = requests.post(
                 mcp_url,
                 headers=_mcp_headers(api_key, session_id),
                 json=body,
                 timeout=HTTP_TIMEOUT,
             )
+            # 서버가 text/event-stream 에 charset 을 안 실으면 requests 는 ISO-8859-1 로
+            # 디코딩한다 → 한글·이모지(멀티바이트 UTF-8)가 깨지고, mojibake 안의 제어문자가
+            # 줄바꿈으로 오인돼 SSE JSON 파싱이 실패한다(거짓 실패 → 중복 게시 위험). UTF-8 강제.
+            resp.encoding = "utf-8"
+            return resp
         except requests.Timeout:
             if write:
                 raise RuntimeError(
