@@ -25,6 +25,15 @@ TF-1040 W5 (2026-06-18):
   음성·STT 0 (의도적 단순화). 사실 보존 — 참석자·결정·숫자·날짜는 그대로, 톤만 입힘.
 - 긴 회의록은 텔레그램 4096자 한도를 넘으니 *여러 메시지로 분할 발송*.
 
+TF-1060 W6 부가 (2026-06-25):
+- *기능 1개 추가* — 텔레그램 글 → 페르소나 톤 변환 → MBTI SNS 자동 게시.
+- `/sns <내용>` *명령 전용* (자연어 자동 인식 X — 사적 채팅 보호). 페르소나가 메모를
+  *본인 톤 짧은 SNS 글*로 변환 → 텔레그램에 *미리보기* + [게시][취소] 인라인 버튼 →
+  [게시] 눌러야 비로소 MBTI SNS(원탁 외부 시스템)에 MCP HTTP 로 게시.
+- 공개·되돌리기 어려운 게시라 *항상 미리보기 확인 게이트* (W4 안전 원칙 정합).
+- `MBTI_SNS_API_KEY` 미설정이면 /sns 가 안내만 (silent skip) — W2~W5 정상 동작.
+- 새 외부 의존성 0 (requests 재사용). outbound HTTP 1종(MCP)뿐.
+
 신경계 비유:
 - 텔레그램·슬랙(감각기관 둘)이 입력을 받아 들이고,
 - Claude Code CLI(뇌)가 페르소나 시스템 프롬프트로 응답을 만들어
@@ -46,16 +55,18 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from datetime import datetime, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -69,6 +80,13 @@ from commands.meeting_notes import (  # W5, TF-1040
     generate_meeting_notes,
     load_meeting_config,
     looks_like_meeting_paste,
+)
+from commands.sns_publish import (  # W6 부가, TF-1060
+    build_sns_system_prompt,
+    generate_sns_post,
+    load_sns_config,
+    post_url,
+    publish_post,
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -215,7 +233,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "이 봇은 도클갱어 페르소나 챗봇이에요.\n"
         "메시지를 보내 주시면 페르소나로 답변해 드려요.\n"
         "오늘 일정이 궁금하면 `/today` 또는 “오늘 일정”,\n"
-        "회의 메모를 정리하려면 `/notes` 뒤에 메모를 붙이거나 “회의록” 이라고 보내 주세요."
+        "회의 메모를 정리하려면 `/notes` 뒤에 메모를 붙이거나 “회의록” 이라고 보내 주세요.\n"
+        "SNS 에 글을 올리려면 `/sns` 뒤에 내용을 적어 주세요 (미리보기 → 확인 후 게시)."
     )
 
 
@@ -458,6 +477,201 @@ async def notes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _send_meeting_notes(update, body, context)
 
 
+# ─────────────────────────────────────────────────────────────
+# W6 부가 (TF-1060) — 텔레그램 글 → 페르소나 톤 → MBTI SNS 게시
+# ─────────────────────────────────────────────────────────────
+
+# 미리보기 초안을 잠깐 들고 있는 user_data 의 네임스페이스 키.
+# callback_data 에는 짧은 토큰만 싣고, 본문은 user_data 에 둔다 (텔레그램 callback_data 64바이트 한도).
+_SNS_DRAFTS_KEY = "sns_drafts"
+
+
+def _sns_enabled() -> bool:
+    """W6 게시 기능이 켜져 있는지 — 키 설정 + yml enabled 둘 다.
+
+    `MBTI_SNS_API_KEY` 미설정이면 자동 OFF (W2~W5 정상 동작).
+    """
+    if not (os.getenv("MBTI_SNS_API_KEY") or "").strip():
+        return False
+    try:
+        return bool(load_sns_config().get("enabled", True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+async def sns_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/sns <내용>` — 메모를 페르소나 톤 SNS 글로 변환 → 미리보기 + [게시][취소].
+
+    명령 전용 (자연어 자동 인식 X — 사적 채팅 보호). 게시는 [게시] 버튼을 눌러야 비로소.
+    """
+    chat_id = update.message.chat_id
+    full = (update.message.text or "")
+    raw = full.split(maxsplit=1)
+    body = raw[1].strip() if len(raw) > 1 else ""
+    logger.info("sns_command chat_id=%s body_len=%s", chat_id, len(body))
+
+    # 키 미설정 → 안내만 (silent skip — W2~W5 영향 0)
+    if not (os.getenv("MBTI_SNS_API_KEY") or "").strip():
+        await update.message.reply_text(
+            "갱이가 SNS 게시는 아직 설정 안 된 걸 봤어요 🐾\n"
+            "→ `/setup-sns` 로 mbti.triforge.kr 가입 + API 키 발급부터 함께 해요.\n"
+            "  (키가 없으면 W2~W5 기능은 그대로 잘 동작해요.)"
+        )
+        return
+
+    config = load_sns_config()  # 매 호출 reload
+    if not config.get("enabled", True):
+        await update.message.reply_text("갱이가 SNS 기능이 꺼져 있는 걸 봤어요 🐾 (config/sns.yml 의 enabled)")
+        return
+
+    if not body:
+        await update.message.reply_text(
+            "갱이가 SNS 글로 다듬어 드릴게요 🐾\n"
+            "→ `/sns` 뒤에 *올리고 싶은 내용*을 적어 주세요.\n"
+            "  예: `/sns 오늘 도클갱어 W6 마무리. 봇이 내 톤으로 글까지 써준다니 신기하다`\n"
+            "  변환된 초안을 *미리보기로 보여드리고*, [게시] 누르면 그때 올라가요 (확인 후 게시)."
+        )
+        return
+
+    # ── 즉시 ack (yml 에서, Claude 호출 전) ──
+    ack = ((config.get("ack") or {}).get("converting") or "").strip()
+    if ack:
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=ack)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sns_ack_send_failed: %s", exc)
+
+    # ── 페르소나 톤 변환 (blocking → to_thread) ──
+    system_prompt = context.bot_data["system_prompt"]
+    sns_system_prompt = build_sns_system_prompt(system_prompt, config)
+    try:
+        draft = await asyncio.to_thread(generate_sns_post, sns_system_prompt, body, config)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("sns_generate_failed")
+        await update.message.reply_text(
+            f"갱이가 SNS 글 다듬다 막혔어요... 🐾\n"
+            f"로그 확인: `tail -f /tmp/doppel-bot.log`\n"
+            f"에러: {type(exc).__name__}: {str(exc)[:200]}"
+        )
+        return
+
+    # ── 초안을 토큰 키로 잠깐 보관 (callback_data 에는 토큰만) ──
+    token = uuid.uuid4().hex[:12]
+    drafts = context.user_data.setdefault(_SNS_DRAFTS_KEY, {})
+    # 메모리 누수 방지 — 묵은 초안이 쌓이면 오래된 것부터 정리 (단순 cap).
+    if len(drafts) > 20:
+        for old in list(drafts)[:-19]:
+            drafts.pop(old, None)
+    drafts[token] = {"content": draft, "mbti_tag": config.get("mbti_tag") or ""}
+
+    keyboard = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton("✅ 게시", callback_data=f"sns:publish:{token}"),
+            InlineKeyboardButton("✖ 취소", callback_data=f"sns:cancel:{token}"),
+        ]]
+    )
+    tag = (config.get("mbti_tag") or "").strip()
+    tag_line = f"\n태그: #{tag}" if tag else ""
+    preview = (
+        "🐾 *SNS 미리보기* — 이대로 올릴까요? (확인 후 게시)\n"
+        f"────────────\n{draft}\n────────────"
+        f"{tag_line}\n\n"
+        "_[게시] 를 눌러야 mbti.triforge.kr 에 올라가요. [취소] 면 폐기._"
+    )
+    try:
+        await update.message.reply_text(preview, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+    except BadRequest:
+        await update.message.reply_text(
+            f"🐾 SNS 미리보기 — 이대로 올릴까요? (확인 후 게시)\n"
+            f"────────────\n{draft}\n────────────{tag_line}\n\n"
+            f"[게시] 를 눌러야 mbti.triforge.kr 에 올라가요. [취소] 면 폐기.",
+            reply_markup=keyboard,
+        )
+
+
+async def sns_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """[게시]/[취소] 인라인 버튼 콜백. 게시 시에만 비로소 MBTI SNS 에 push."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "sns":
+        return
+    _, action, token = parts
+
+    drafts = context.user_data.get(_SNS_DRAFTS_KEY) or {}
+    draft = drafts.pop(token, None)  # 한 번 쓰면 소비 — 중복 게시 방지
+
+    if draft is None:
+        try:
+            await query.edit_message_text(
+                "갱이가 이 초안을 못 찾았어요 🐾 (이미 처리됐거나 봇이 재시작됐어요). "
+                "`/sns` 로 다시 시도해 주세요."
+            )
+        except BadRequest:
+            pass
+        return
+
+    if action == "cancel":
+        logger.info("sns_cancel token=%s", token)
+        try:
+            await query.edit_message_text("취소했어요 🐾 게시하지 않았어요.")
+        except BadRequest:
+            pass
+        return
+
+    if action != "publish":
+        return
+
+    # ── 게시 — 그제서야 MBTI SNS 에 손을 뻗음 (blocking → to_thread) ──
+    content = draft.get("content") or ""
+    mbti_tag = draft.get("mbti_tag") or ""
+    api_key = (os.getenv("MBTI_SNS_API_KEY") or "").strip()
+    mcp_url = (os.getenv("MBTI_SNS_MCP_URL") or "").strip()  # 빈 값이면 모듈 기본값 사용
+
+    if not api_key:
+        try:
+            await query.edit_message_text(
+                "갱이가 보니 MBTI_SNS_API_KEY 가 사라졌어요 🐾 `/setup-sns` 로 다시 박아 주세요."
+            )
+        except BadRequest:
+            pass
+        return
+
+    try:
+        await query.edit_message_text("올리는 중이에요… 🐾")
+    except BadRequest:
+        pass
+
+    try:
+        publish_kwargs = {"api_key": api_key, "mbti_tag": mbti_tag}
+        if mcp_url:
+            publish_kwargs["mcp_url"] = mcp_url
+        post = await asyncio.to_thread(publish_post, content, **publish_kwargs)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("sns_publish_failed")
+        msg = (
+            f"갱이가 SNS 게시 중에 막혔어요... 🐾\n"
+            f"{type(exc).__name__}: {str(exc)[:300]}"
+        )
+        try:
+            await query.edit_message_text(msg)
+        except BadRequest:
+            await context.bot.send_message(chat_id=query.message.chat_id, text=msg)
+        return
+
+    pid = post.get("id")
+    url = post_url(post)
+    logger.info("sns_published post_id=%s", pid)
+    done = f"✅ 올렸어요 (post #{pid}) 🐾"
+    if url:
+        done += f"\n{url}"
+    try:
+        await query.edit_message_text(done)
+    except BadRequest:
+        await context.bot.send_message(chat_id=query.message.chat_id, text=done)
+
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """일반 메시지 → Claude Code CLI 응답.
 
@@ -652,6 +866,8 @@ def main() -> int:
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("today", today_handler))  # W3, TF-958
     app.add_handler(CommandHandler("notes", notes_handler))  # W5, TF-1040
+    app.add_handler(CommandHandler("sns", sns_handler))  # W6 부가, TF-1060
+    app.add_handler(CallbackQueryHandler(sns_callback_handler, pattern=r"^sns:"))  # W6 [게시]/[취소]
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     # W3 (TF-958) — 자동 푸시 등록. yml 없거나 enabled=False 면 silent skip.
